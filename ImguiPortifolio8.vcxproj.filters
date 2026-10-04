@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="framework">
+      <UniqueIdentifier>{11111111-1111-1111-1111-111111111111}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="framework\app">
+      <UniqueIdentifier>{22222222-2222-2222-2222-222222222222}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="framework\core">
+      <UniqueIdentifier>{33333333-3333-3333-3333-333333333333}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="framework\helpers">
+      <UniqueIdentifier>{44444444-4444-4444-4444-444444444444}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="framework\theme">
+      <UniqueIdentifier>{55555555-5555-5555-5555-555555555555}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="framework\data">
+      <UniqueIdentifier>{66666666-6666-6666-6666-666666666666}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="thirdparty\imgui">
+      <UniqueIdentifier>{77777777-7777-7777-7777-777777777777}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="thirdparty\imgui\backends">
+      <UniqueIdentifier>{88888888-8888-8888-8888-888888888888}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="framework\main.cpp"><Filter>framework</Filter></ClCompile>
+    <ClCompile Include="framework\app\gui.cpp"><Filter>framework\app</Filter></ClCompile>
+    <ClCompile Include="framework\core\device.cpp"><Filter>framework\core</Filter></ClCompile>
+    <ClCompile Include="framework\core\window.cpp"><Filter>framework\core</Filter></ClCompile>
+    <ClCompile Include="framework\core\backdrop.cpp"><Filter>framework\core</Filter></ClCompile>
+    <ClCompile Include="framework\helpers\fonts.cpp"><Filter>framework\helpers</Filter></ClCompile>
+    <ClCompile Include="framework\helpers\screenshot.cpp"><Filter>framework\helpers</Filter></ClCompile>
+    <ClCompile Include="framework\helpers\stb_impl.cpp"><Filter>framework\helpers</Filter></ClCompile>
+    <ClCompile Include="framework\helpers\window_drag.cpp"><Filter>framework\helpers</Filter></ClCompile>
+    <ClCompile Include="framework\data\fontello_data.cpp"><Filter>framework\data</Filter></ClCompile>
+    <ClCompile Include="framework\data\fonts_data.cpp"><Filter>framework\data</Filter></ClCompile>
+    <ClCompile Include="thirdparty\imgui\imgui.cpp"><Filter>thirdparty\imgui</Filter></ClCompile>
+    <ClCompile Include="thirdparty\imgui\imgui_draw.cpp"><Filter>thirdparty\imgui</Filter></ClCompile>
+    <ClCompile Include="thirdparty\imgui\imgui_tables.cpp"><Filter>thirdparty\imgui</Filter></ClCompile>
+    <ClCompile Include="thirdparty\imgui\imgui_widgets.cpp"><Filter>thirdparty\imgui</Filter></ClCompile>
+    <ClCompile Include="thirdparty\imgui\imgui_freetype.cpp"><Filter>thirdparty\imgui</Filter></ClCompile>
+    <ClCompile Include="thirdparty\imgui\backends\imgui_impl_win32.cpp"><Filter>thirdparty\imgui\backends</Filter></ClCompile>
+    <ClCompile Include="thirdparty\imgui\backends\imgui_impl_dx11.cpp"><Filter>thirdparty\imgui\backends</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="framework\app\gui.h"><Filter>framework\app</Filter></ClInclude>
+    <ClInclude Include="framework\core\backdrop.h"><Filter>framework\core</Filter></ClInclude>
+    <ClInclude Include="framework\core\device.h"><Filter>framework\core</Filter></ClInclude>
+    <ClInclude Include="framework\core\window.h"><Filter>framework\core</Filter></ClInclude>
+    <ClInclude Include="framework\helpers\fonts.h"><Filter>framework\helpers</Filter></ClInclude>
+    <ClInclude Include="framework\helpers\window_drag.h"><Filter>framework\helpers</Filter></ClInclude>
+    <ClInclude Include="framework\theme\colors.h"><Filter>framework\theme</Filter></ClInclude>
+    <ClInclude Include="framework\theme\layout.h"><Filter>framework\theme</Filter></ClInclude>
+    <ClInclude Include="framework\data\fontello_data.h"><Filter>framework\data</Filter></ClInclude>
+    <ClInclude Include="framework\data\fonts_data.h"><Filter>framework\data</Filter></ClInclude>
+  </ItemGroup>
+</Project>

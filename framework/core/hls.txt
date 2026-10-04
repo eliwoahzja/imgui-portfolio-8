@@ -1,0 +1,127 @@
+    const char* fullscreen_vs_code = R"(
+struct VS_OUT {
+    float4 pos : SV_POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VS_OUT main(uint id : SV_VertexID) {
+    float2 uv = float2((id << 1) & 2, id & 2);
+    float2 pos = uv * 2.0 - 1.0;
+
+    VS_OUT o;
+    o.pos = float4(pos, 0, 1);
+    o.uv  = uv;
+    return o;
+}
+)";
+
+    const char* blur_horizontal_ps_code = R"(
+Texture2D input_tex : register(t0);
+SamplerState linear_sampler : register(s0);
+
+cbuffer BlurParams : register(b2)
+{
+    float2 texel_size;
+    float blur_strength;
+    bool flip;
+    float _pad;
+}
+
+static const float weights[9] = {
+    0.13298, 0.23227, 0.1353, 0.0511, 0.01253, 0.00198, 0.00020, 0.00001, 0.0
+};
+
+float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target
+{
+    float3 result = input_tex.Sample(linear_sampler, uv).rgb * weights[0];
+    
+    // Sample horizontally with variable blur strength
+    for(int i = 1; i < 9; ++i)
+    {
+        float offset = (float)i * texel_size.x * blur_strength;
+        if (flip)
+            uv.y = 1.0 - uv.y;
+
+        result += input_tex.Sample(linear_sampler, uv + float2(offset, 0.0)).rgb * weights[i];
+        result += input_tex.Sample(linear_sampler, uv - float2(offset, 0.0)).rgb * weights[i];
+    }
+    
+    return float4(result, 1.0);
+}
+)";
+
+    const char* blur_vertical_ps_code = R"(
+Texture2D input_tex : register(t0);
+SamplerState linear_sampler : register(s0);
+
+cbuffer BlurParams : register(b2)
+{
+    float2 texel_size;
+    float blur_strength;
+    bool flip;
+    float _pad;
+}
+
+static const float weights[9] = {
+    0.13298, 0.23227, 0.1353, 0.0511, 0.01253, 0.00198, 0.00020, 0.00001, 0.0
+};
+
+float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target
+{
+    float3 result = input_tex.Sample(linear_sampler, uv).rgb * weights[0];
+    
+    // Sample vertically with variable blur strength
+    for(int i = 1; i < 9; ++i)
+    {
+        float offset = (float)i * texel_size.y * blur_strength;
+        if (flip)
+            uv.y = 1.0 - uv.y;
+
+        result += input_tex.Sample(linear_sampler, uv + float2(0.0, offset)).rgb * weights[i];
+        result += input_tex.Sample(linear_sampler, uv - float2(0.0, offset)).rgb * weights[i];
+    }
+    
+    return float4(result, 1.0);
+}
+)";
+
+    const char* downsample_blur_ps_code = R"(
+Texture2D input_tex : register(t0);
+SamplerState linear_sampler : register(s0);
+
+cbuffer BlurParams : register(b2)
+{
+    float2 texel_size;
+    float blur_strength;
+    bool flip;
+    float _pad;
+}
+
+float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target
+{
+    // 13-tap downsample with built-in blur
+    float4 result = 0.0;
+
+    if (flip)
+        uv.y = 1.0 - uv.y;
+    
+    // Center sample
+    result += input_tex.Sample(linear_sampler, uv) * 0.125;
+    
+    // 4-tap box filter
+    float2 offset = texel_size;
+    result += input_tex.Sample(linear_sampler, uv + float2(-offset.x, -offset.y)) * 0.125;
+    result += input_tex.Sample(linear_sampler, uv + float2(offset.x, -offset.y)) * 0.125;
+    result += input_tex.Sample(linear_sampler, uv + float2(-offset.x, offset.y)) * 0.125;
+    result += input_tex.Sample(linear_sampler, uv + float2(offset.x, offset.y)) * 0.125;
+    
+    // Additional samples for smoother blur
+    offset *= 0.5;
+    result += input_tex.Sample(linear_sampler, uv + float2(-offset.x * 2, 0)) * 0.0625;
+    result += input_tex.Sample(linear_sampler, uv + float2(offset.x * 2, 0)) * 0.0625;
+    result += input_tex.Sample(linear_sampler, uv + float2(0, -offset.y * 2)) * 0.0625;
+    result += input_tex.Sample(linear_sampler, uv + float2(0, offset.y * 2)) * 0.0625;
+    
+    return result;
+}
+)";

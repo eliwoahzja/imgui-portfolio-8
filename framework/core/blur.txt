@@ -1,0 +1,312 @@
+        fullscreen_vs = static_cast<ID3D11VertexShader*>(create_vertex_shader(hls::fullscreen_vs_code));
+        if (!fullscreen_vs) {
+            REN_DBG("Failed to create fullscreen vertex shader");
+        }
+
+        downsample_ps = static_cast<ID3D11PixelShader*>(create_fragment_shader(hls::downsample_blur_ps_code));
+        if (!downsample_ps) {
+            REN_DBG("Failed to create enhanced downsample shader");
+        }
+
+
+        // Create blur shaders
+        blur_horizontal_ps = static_cast<ID3D11PixelShader*>(create_fragment_shader(hls::blur_horizontal_ps_code));
+        if (!blur_horizontal_ps) {
+            REN_DBG("Failed to create horizontal blur shader");
+        }
+
+        blur_vertical_ps = static_cast<ID3D11PixelShader*>(create_fragment_shader(hls::blur_vertical_ps_code));
+        if (!blur_vertical_ps) {
+            REN_DBG("Failed to create vertical blur shader");
+        }
+
+        // Create blur parameters constant buffer
+        {
+            D3D11_BUFFER_DESC desc = {};
+            desc.ByteWidth = sizeof(float) * 4; // texel_size.xy, blur_strength, pad
+            desc.Usage = D3D11_USAGE_DYNAMIC;
+            desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            if (FAILED(device->CreateBuffer(&desc, nullptr, &blur_params_cb))) {
+                REN_DBG("Failed to create blur params constant buffer");
+            }
+        }
+
+
+
+
+ void adapter_dx11::create_blur_buffers(UINT width, UINT height) {
+        // If already created and matching, nothing to do
+        if (blur_temp_tex && blur_final_tex && blur_width == width && blur_height == height)
+            return;
+
+        // Release only blur-specific resources (not downsample buffers)
+        cleanup_blur_resources();
+
+        blur_width = width;
+        blur_height = height;
+
+        if (!device) {
+            REN_DBG("create_blur_buffers: device is null");
+            return;
+        }
+
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.MipLevels = 1;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_DEFAULT;
+        texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+        HRESULT hr = S_OK;
+
+        hr = device->CreateTexture2D(&texDesc, nullptr, &blur_temp_tex);
+        if (FAILED(hr)) {
+            REN_DBG("create_blur_buffers: CreateTexture2D(blur_temp) failed hr=0x%08X");
+            cleanup_blur_resources();
+            return;
+        }
+
+        hr = device->CreateRenderTargetView(blur_temp_tex, nullptr, &blur_temp_rtv);
+        if (FAILED(hr)) {
+            REN_DBG("create_blur_buffers: CreateRenderTargetView(blur_temp) failed hr=0x%08X");
+            cleanup_blur_resources();
+            return;
+        }
+
+        hr = device->CreateShaderResourceView(blur_temp_tex, nullptr, &blur_temp_srv);
+        if (FAILED(hr)) {
+            REN_DBG("create_blur_buffers: CreateShaderResourceView(blur_temp) failed hr=0x%08X");
+            cleanup_blur_resources();
+            return;
+        }
+
+        hr = device->CreateTexture2D(&texDesc, nullptr, &blur_final_tex);
+        if (FAILED(hr)) {
+            REN_DBG("create_blur_buffers: CreateTexture2D(blur_final) failed hr=0x%08X");
+            cleanup_blur_resources();
+            return;
+        }
+
+        hr = device->CreateRenderTargetView(blur_final_tex, nullptr, &blur_final_rtv);
+        if (FAILED(hr)) {
+            REN_DBG("create_blur_buffers: CreateRenderTargetView(blur_final) failed hr=0x%08X");
+            cleanup_blur_resources();
+            return;
+        }
+
+        hr = device->CreateShaderResourceView(blur_final_tex, nullptr, &blur_final_srv);
+        if (FAILED(hr)) {
+            REN_DBG("create_blur_buffers: CreateShaderResourceView(blur_final) failed hr=0x%08X");
+            cleanup_blur_resources();
+            return;
+        }
+
+        REN_DBG("create_blur_buffers: success %ux%u");
+    }
+
+    void adapter_dx11::cleanup_blur_resources() {
+        safe_release(blur_temp_tex);
+        safe_release(blur_temp_rtv);
+        safe_release(blur_temp_srv);
+        safe_release(blur_final_tex);
+        safe_release(blur_final_rtv);
+        safe_release(blur_final_srv);
+    }
+
+    // Return AddRef'd SRV; caller must Release()
+    void* adapter_dx11::get_blurred_back_buffer() {
+        if (!blur_final_srv) {
+            REN_DBG("get_blurred_back_buffer: blur_final_srv is NULL");
+            return nullptr;
+        }
+        blur_final_srv->AddRef();
+        return static_cast<void*>(blur_final_srv);
+    }
+
+    void adapter_dx11::apply_blur_effect(ID3D11ShaderResourceView* input_srv, float blur_strength) {
+        // Ensure we have resources
+        if (!input_srv || !blur_temp_rtv || !blur_final_rtv || !blur_params_cb || !blur_temp_srv || !blur_final_srv) {
+            return;
+        }
+
+        // Use cached downsample size for viewport/texel size if available; fall back to blur_width/height
+        UINT vw = ds_width_cached ? ds_width_cached : blur_width;
+        UINT vh = ds_height_cached ? ds_height_cached : blur_height;
+        if (!vw || !vh) return;
+
+        // Set viewport for blur operations
+        D3D11_VIEWPORT vp = {};
+        vp.TopLeftX = 0;
+        vp.TopLeftY = 0;
+        vp.Width = static_cast<float>(vw);
+        vp.Height = static_cast<float>(vh);
+        vp.MinDepth = 0.0f;
+        vp.MaxDepth = 1.0f;
+        ctx->RSSetViewports(1, &vp);
+
+        // We'll do a single horizontal pass then vertical pass per iteration.
+        // Update constant buffer for texel size and strength
+        auto set_blur_cb = [&](float texel_x, float texel_y, float strength, bool flip) {
+            D3D11_MAPPED_SUBRESOURCE mapped;
+            if (SUCCEEDED(ctx->Map(blur_params_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+                float* params = reinterpret_cast<float*>(mapped.pData);
+                params[0] = texel_x;
+                params[1] = texel_y;
+                params[2] = strength;
+                *(bool*)(&params[3]) = flip;
+                ctx->Unmap(blur_params_cb, 0);
+            }
+        };
+
+        ctx->VSSetShader(fullscreen_vs, nullptr, 0);
+        ctx->PSSetSamplers(0, 1, &linear_sampler);
+        ctx->PSSetConstantBuffers(2, 1, &blur_params_cb);
+
+        // PASS A: Horizontal (input_srv -> blur_temp)
+        // Ensure input_srv is not the same resource bound as the RTV target (it isn't because blur_temp_rtv writes to blur_temp_tex).
+        set_blur_cb(1.0f / static_cast<float>(vw), 0.0f, blur_strength, false);
+        // Unbind any SRV that might be bound to the same texture as the RTV we will write to
+        ID3D11ShaderResourceView* null_srvs[1] = { nullptr };
+        ctx->PSSetShaderResources(0, 1, null_srvs);
+
+        ctx->OMSetRenderTargets(1, &blur_temp_rtv, nullptr);
+        ctx->PSSetShader(blur_horizontal_ps, nullptr, 0);
+        ctx->PSSetShaderResources(0, 1, &input_srv);
+        ctx->Draw(3, 0);
+
+        // Unbind input before next pass
+        ctx->PSSetShaderResources(0, 1, null_srvs);
+
+        // PASS B: Vertical (blur_temp -> blur_final)
+        set_blur_cb(0.0f, 1.0f / static_cast<float>(vh), blur_strength, false);
+        ctx->OMSetRenderTargets(1, &blur_final_rtv, nullptr);
+        ctx->PSSetShader(blur_vertical_ps, nullptr, 0);
+        ctx->PSSetShaderResources(0, 1, &blur_temp_srv);
+        ctx->Draw(3, 0);
+
+        // Unbind temp srv
+        ctx->PSSetShaderResources(0, 1, null_srvs);
+    }
+
+    void adapter_dx11::update_back_buffer(bool only_downsampled) {
+        REN_DBG("dx11: updating back buffer with blur");
+
+        if (!this->swap_chain) {
+            REN_DBG("ERROR: No swap chain");
+            return;
+        }
+
+        // Declare variables at the beginning to avoid goto issues
+        ID3D11RenderTargetView* original_rtv = nullptr;
+        ID3D11DepthStencilView* original_dsv = nullptr;
+        ID3D11Texture2D* back_buffer = nullptr;
+        ID3D11ShaderResourceView* back_buffer_srv = nullptr;
+        UINT original_width = 0, original_height = 0;
+        UINT ds_width = 0, ds_height = 0;
+        UINT num_viewports = 1;
+        D3D11_TEXTURE2D_DESC desc = {};
+        D3D11_VIEWPORT vp = {};
+        D3D11_VIEWPORT original_vp = {};
+
+        // Store current render target state (IMPORTANT!)
+        ctx->OMGetRenderTargets(1, &original_rtv, &original_dsv);
+        // Store the original viewport
+        ctx->RSGetViewports(&num_viewports, &original_vp);
+
+        // Get the current back buffer from the swap chain
+        if (FAILED(this->swap_chain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&back_buffer))) {
+            REN_DBG("Failed to get back buffer from swap chain");
+            goto cleanup;
+        }
+
+        // Get back buffer dimensions
+        back_buffer->GetDesc(&desc);
+        original_width = desc.Width;
+        original_height = desc.Height;
+        ds_width = desc.Width / 4;
+        ds_height = desc.Height / 4;
+
+        REN_DBG("Processing blur");
+
+        // Create/recreate blur buffers if they don't match the downsampled size
+        if (blur_width != ds_width || blur_height != ds_height) {
+            create_blur_buffers(ds_width, ds_height);
+        }
+
+        // Check if blur_final_srv was created
+        if (!blur_final_srv) {
+            REN_DBG("ERROR: blur_final_srv is NULL after create_blur_buffers!");
+            goto cleanup;
+        }
+
+        // Create SRV from original back buffer
+        if (FAILED(device->CreateShaderResourceView(back_buffer, nullptr, &back_buffer_srv))) {
+            REN_DBG("Failed to create SRV for back buffer");
+            goto cleanup;
+        }
+
+        // Create/recreate downsample buffer
+        create_downsample_buffer(ds_width, ds_height);
+
+        // STEP 1: Downsample with built-in blur
+        ctx->OMSetRenderTargets(1, &back_buffer_ds_rtv, nullptr);
+
+        vp.TopLeftX = 0;
+        vp.TopLeftY = 0;
+        vp.Width = static_cast<float>(ds_width);
+        vp.Height = static_cast<float>(ds_height);
+        vp.MinDepth = 0.0f;
+        vp.MaxDepth = 1.0f;
+        ctx->RSSetViewports(1, &vp);
+
+        // Update blur parameters for downsampling
+        D3D11_MAPPED_SUBRESOURCE mapped_resource;
+        if (SUCCEEDED(ctx->Map(blur_params_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_resource))) {
+            float* params = reinterpret_cast<float*>(mapped_resource.pData);
+            params[0] = 1.0f / static_cast<float>(original_width);
+            params[1] = 1.0f / static_cast<float>(original_height);
+            params[2] = 1.0f;
+            *(bool*)(&params[3]) = false;
+            ctx->Unmap(blur_params_cb, 0);
+        }
+
+        ctx->VSSetShader(fullscreen_vs, nullptr, 0);
+        ctx->PSSetShader(downsample_ps, nullptr, 0);
+        ctx->PSSetConstantBuffers(2, 1, &blur_params_cb);
+        ctx->PSSetShaderResources(0, 1, &back_buffer_srv);
+        ctx->PSSetSamplers(0, 1, &linear_sampler);
+        ctx->Draw(3, 0);
+
+        // STEP 2: Apply multi-pass Gaussian blur
+        apply_blur_effect(back_buffer_ds_srv, 1.5f);
+
+        // Flush to ensure completion
+        ctx->Flush();
+
+        //REN_DBG("Blur generation complete");
+
+    cleanup:
+        // Unbind resources
+        ID3D11ShaderResourceView* null_srv[1] = { nullptr };
+        ctx->PSSetShaderResources(0, 1, null_srv);
+
+        // Restore original render target
+        ctx->OMSetRenderTargets(1, &original_rtv, original_dsv);
+        if (original_rtv) original_rtv->Release();
+        // Restore the original viewport
+        ctx->RSSetViewports(1, &original_vp);
+
+        if (original_dsv)
+            original_dsv->Release();
+
+        // Cleanup temporary resources
+        if (back_buffer_srv)
+            back_buffer_srv->Release();
+        
+        if (back_buffer)
+            back_buffer->Release();
+    }
